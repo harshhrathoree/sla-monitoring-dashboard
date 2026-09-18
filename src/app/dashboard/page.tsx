@@ -1,42 +1,19 @@
 /**
  * app/dashboard/page.tsx — Dashboard page (/dashboard)
  *
- * Server Component: fetches /api/stats at render time (SSR).
- * - No client-side data loading needed for the initial stats view.
- * - StatsSection receives data as props.
- * - LogsSection is a fully client-side component (manages its own fetch/filter state).
+ * Server Component: calls getStats() directly (no internal HTTP fetch).
+ * - StatsSection receives stats data as props (SSR).
+ * - LogsSection is a client component managing its own fetch/filter state.
  */
 
 import Link from "next/link";
 import NavBar from "@/components/NavBar";
 import StatsSection from "@/components/StatsSection";
 import LogsSection from "@/components/LogsSection";
-import type { StatsResponse } from "@/types/api";
+import { getStats } from "@/lib/getStats";
 
 // Always re-render on request (data changes with each upload)
 export const dynamic = "force-dynamic";
-
-// ─── Fetch helpers ────────────────────────────────────────────────────────────
-
-async function fetchStats(): Promise<StatsResponse | null> {
-  try {
-    // In Server Components we call the API route by absolute URL.
-    // VERCEL_URL is set automatically on Vercel; fall back to localhost for dev.
-    const base =
-      process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:3000";
-
-    const res = await fetch(`${base}/api/stats`, {
-      cache: "no-store", // always fresh
-    });
-
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
-}
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
@@ -76,7 +53,7 @@ function EmptyState() {
 
 // ─── Error state ──────────────────────────────────────────────────────────────
 
-function ErrorState() {
+function ErrorState({ message }: { message?: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-24 gap-4">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-red-50">
@@ -94,10 +71,10 @@ function ErrorState() {
           />
         </svg>
       </div>
-      <div className="text-center">
+      <div className="text-center max-w-sm">
         <h2 className="text-lg font-semibold text-zinc-800">Could not load stats</h2>
         <p className="mt-1 text-sm text-zinc-500">
-          Check that the DATABASE_URL is configured and the schema has been pushed.
+          {message ?? "Check that DATABASE_URL is set in Vercel environment variables."}
         </p>
       </div>
     </div>
@@ -107,11 +84,18 @@ function ErrorState() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function DashboardPage() {
-  const stats = await fetchStats();
+  let stats;
+  let errorMessage: string | undefined;
+
+  try {
+    stats = await getStats();
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : "Unknown error";
+    stats = null;
+  }
 
   const serviceIds = stats?.services.map((s) => s.serviceId) ?? [];
   const hasData = stats !== null && stats.services.length > 0;
-  const fetchFailed = stats === null;
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-50">
@@ -132,24 +116,31 @@ export default async function DashboardPage() {
             href="/"
             className="flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
+              />
             </svg>
             Upload CSV
           </Link>
         </div>
 
         {/* Body */}
-        {fetchFailed ? (
-          <ErrorState />
+        {stats === null ? (
+          <ErrorState message={errorMessage} />
         ) : !hasData ? (
           <EmptyState />
         ) : (
           <div className="flex flex-col gap-6">
-            {/* Stats section (SSR data passed as props) */}
             <StatsSection data={stats} />
-
-            {/* Logs section (client-side fetch + filter state) */}
             <LogsSection serviceIds={serviceIds} />
           </div>
         )}
