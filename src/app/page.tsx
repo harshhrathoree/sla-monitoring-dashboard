@@ -6,38 +6,13 @@
  * the info sidebar.
  */
 
-import Link from "next/link";
+import NavBar from "@/components/NavBar";
 import UploadForm from "@/components/UploadForm";
 
 export default function UploadPage() {
   return (
     <div className="min-h-screen flex flex-col">
-      {/* ── Top nav bar ───────────────────────────────────────────────────── */}
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            {/* Pulse indicator — decorative */}
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            </span>
-            <span className="text-sm font-semibold text-zinc-800">
-              SLA Monitor
-            </span>
-          </div>
-          <nav className="flex items-center gap-4">
-            <span className="text-sm font-medium text-zinc-900 border-b-2 border-zinc-900 pb-0.5">
-              Upload
-            </span>
-            <Link
-              href="/dashboard"
-              className="text-sm font-medium text-zinc-500 hover:text-zinc-800 transition-colors"
-            >
-              Dashboard
-            </Link>
-          </nav>
-        </div>
-      </header>
+      <NavBar activePage="upload" />
 
       {/* ── Main content ─────────────────────────────────────────────────── */}
       <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
