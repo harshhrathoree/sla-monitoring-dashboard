@@ -1,69 +1,167 @@
-import Image from "next/image";
+/**
+ * app/page.tsx — Upload page (/)
+ *
+ * Server Component shell. The actual interactive upload logic lives in the
+ * UploadForm client component. This page provides the layout, heading, and
+ * the info sidebar.
+ */
 
-export default function Home() {
+import Link from "next/link";
+import UploadForm from "@/components/UploadForm";
+
+export default function UploadPage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="min-h-screen flex flex-col">
+      {/* ── Top nav bar ───────────────────────────────────────────────────── */}
+      <header className="border-b border-zinc-200 bg-white">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
+          <div className="flex items-center gap-2">
+            {/* Pulse indicator — decorative */}
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            </span>
+            <span className="text-sm font-semibold text-zinc-800">
+              SLA Monitor
+            </span>
+          </div>
+          <nav className="flex items-center gap-4">
+            <span className="text-sm font-medium text-zinc-900 border-b-2 border-zinc-900 pb-0.5">
+              Upload
+            </span>
+            <Link
+              href="/dashboard"
+              className="text-sm font-medium text-zinc-500 hover:text-zinc-800 transition-colors"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              Dashboard
+            </Link>
+          </nav>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </header>
+
+      {/* ── Main content ─────────────────────────────────────────────────── */}
+      <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-5">
+          {/* Left column — heading + upload form */}
+          <div className="lg:col-span-3 flex flex-col gap-8">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-zinc-900">
+                Upload monitoring data
+              </h1>
+              <p className="mt-2 text-sm text-zinc-500 leading-relaxed max-w-md">
+                Upload a CSV of health-check logs. The pipeline will parse,
+                clean, and persist the data so you can explore SLA metrics on
+                the dashboard.
+              </p>
+            </div>
+
+            <UploadForm />
+          </div>
+
+          {/* Right column — info sidebar */}
+          <aside className="lg:col-span-2 flex flex-col gap-6">
+            {/* Expected format card */}
+            <div className="rounded-xl border border-zinc-200 bg-white p-5">
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-3">
+                Expected CSV format
+              </h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-zinc-100">
+                      <th className="pb-2 pr-4 text-left font-semibold text-zinc-600">
+                        Column
+                      </th>
+                      <th className="pb-2 text-left font-semibold text-zinc-600">
+                        Example
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-zinc-500">
+                    {[
+                      ["service_id", "svc-auth"],
+                      ["service_name", "auth-api"],
+                      ["timestamp", "2025-05-13T12:00:00Z"],
+                      ["status_code", "200"],
+                      ["latency", "177"],
+                      ["latency_unit", "ms / s"],
+                      ["agent", "agent-1"],
+                      ["region", "ap-south-1"],
+                    ].map(([col, ex]) => (
+                      <tr key={col} className="border-b border-zinc-50 last:border-0">
+                        <td className="py-1.5 pr-4 font-mono">{col}</td>
+                        <td className="py-1.5 text-zinc-400">{ex}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Data cleaning card */}
+            <div className="rounded-xl border border-zinc-200 bg-white p-5">
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-3">
+                What gets cleaned automatically
+              </h2>
+              <ul className="flex flex-col gap-2">
+                {[
+                  ["Unix epoch timestamps", "Converted to UTC ISO"],
+                  ["Timezone offsets", "Normalised to UTC"],
+                  ["Latency in seconds", "Converted to ms"],
+                  ["Missing latency", "Stored as null, flagged"],
+                  ["Negative latency", "Stored as null, flagged"],
+                  ["Invalid status codes", "Kept + flagged"],
+                  ["Duplicate rows", "Skipped on conflict"],
+                ].map(([issue, fix]) => (
+                  <li key={issue} className="flex items-start gap-2 text-xs">
+                    <svg
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-400"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={2.5}
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="m4.5 12.75 6 6 9-13.5"
+                      />
+                    </svg>
+                    <span>
+                      <span className="font-medium text-zinc-700">{issue}</span>
+                      <span className="text-zinc-400"> — {fix}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* SLA info card */}
+            <div className="rounded-xl border border-amber-100 bg-amber-50 p-5">
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-amber-600 mb-2">
+                SLA target
+              </h2>
+              <p className="text-2xl font-bold text-amber-700 tabular-nums">
+                99.9%
+              </p>
+              <p className="mt-1 text-xs text-amber-600 leading-relaxed">
+                Uptime is calculated as successful 2xx checks ÷ total checks.
+                Any service below 99.9% is marked as an SLA breach.
+              </p>
+            </div>
+          </aside>
         </div>
       </main>
+
+      {/* ── Footer ──────────────────────────────────────────────────────── */}
+      <footer className="border-t border-zinc-200 bg-white py-4">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <p className="text-xs text-zinc-400 text-center">
+            SLA Monitoring Dashboard &middot; Full Stack Case Study
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

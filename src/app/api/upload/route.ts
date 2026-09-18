@@ -12,20 +12,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import Papa from "papaparse";
-import { db, monitoringChecks, uploadBatches } from "@/db";
+import { getDb, monitoringChecks, uploadBatches } from "@/db";
 import { cleanBatch, type RawRow } from "@/lib/cleaner";
 import { eq } from "drizzle-orm";
 
-// Raise Vercel's default 4.5 MB body limit to 10 MB to handle the larger
-// provided CSVs (~30-day file is ~1.5 MB; leaving headroom for future use).
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-// Vercel serverless function size limit config (Next.js App Router style)
-export const maxDuration = 60; // seconds — upload + clean + insert can be slow
+// App Router route-segment config — replaces the old Pages Router `config` export.
+// Raises execution timeout to 60 s (upload + clean + insert can be slow for
+// large files) and sets the max request body size to 10 MB.
+export const maxDuration = 60;
 
 /** Number of rows per INSERT batch. Keeps each statement well under Postgres's
  *  65 535 parameter limit (9 params × 500 = 4 500, well within bounds). */
@@ -122,6 +116,7 @@ export async function POST(req: NextRequest) {
   // ── 5. Create the upload_batches record (placeholder counts) ──────────────
   // We insert the batch row first so we have the UUID to reference in the
   // monitoring_checks FK. Counts are updated at the end.
+  const db = getDb();
   let batchId: string;
   try {
     const [batch] = await db
