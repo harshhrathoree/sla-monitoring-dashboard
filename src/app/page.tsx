@@ -7,7 +7,7 @@
  */
 
 import NavBar from "@/components/NavBar";
-import UploadForm from "@/components/UploadForm";
+import UploadPageClient from "@/components/UploadPageClient";
 
 export default function UploadPage() {
   return (
@@ -30,7 +30,7 @@ export default function UploadPage() {
               </p>
             </div>
 
-            <UploadForm />
+            <UploadPageClient />
           </div>
 
           {/* Right column — info sidebar */}

@@ -4,8 +4,8 @@ A production-grade SLA monitoring pipeline: upload a messy CSV of health-check
 logs → serverless cloud function parses & cleans → persisted to Postgres →
 single-screen dashboard shows stats + filterable logs.
 
-> **Live URL:** _to be filled after Vercel deploy_  
-> **Last verified live:** _to be filled_
+> **Live URL:** https://sla-monitoring-dashboard.vercel.app
+> **Last verified live:** 2025-09-18
 
 ---
 

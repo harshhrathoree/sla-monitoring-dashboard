@@ -58,9 +58,12 @@ export default function UptimeChart({ services }: UptimeChartProps) {
     breached: s.slaBreached,
   }));
 
-  // Y-axis domain: zoom in around the interesting range
+  // Y-axis domain: anchor at a meaningful floor so bars show real differences.
+  // If any service is below 99%, drop to 95% floor so the breach is visible.
+  // If all services are above 99%, use 98% floor — avoids the "all bars equal"
+  // problem caused by zooming in to e.g. 99.9998%–100%.
   const minUptime = Math.min(...data.map((d) => d.uptime));
-  const yMin = Math.max(0, Math.floor(minUptime * 10) / 10 - 0.2);
+  const yMin = minUptime < 99 ? 95 : 98;
   const yMax = 100;
 
   return (

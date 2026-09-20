@@ -41,7 +41,12 @@ function estimateRows(file: File): string {
   return formatBytes(file.size);
 }
 
-export default function UploadForm() {
+interface UploadFormProps {
+  /** Called after a successful upload — parent uses this to refresh history */
+  onUploadSuccess?: () => void;
+}
+
+export default function UploadForm({ onUploadSuccess }: UploadFormProps = {}) {
   const [state, setState] = useState<State>({ status: "idle" });
 
   const handleFile = useCallback((file: File) => {
@@ -72,6 +77,7 @@ export default function UploadForm() {
       }
 
       setState({ status: "success", summary: json as UploadSummary });
+      onUploadSuccess?.();
     } catch (err) {
       setState({
         status: "error",
@@ -82,7 +88,7 @@ export default function UploadForm() {
         filename: file.name,
       });
     }
-  }, []);
+  }, [onUploadSuccess]);
 
   const reset = useCallback(() => setState({ status: "idle" }), []);
 
