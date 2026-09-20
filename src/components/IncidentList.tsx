@@ -113,14 +113,23 @@ export default function IncidentList({ services }: IncidentListProps) {
     );
   }
 
-  const visible = expanded ? flat : flat.slice(0, INITIAL_VISIBLE);
   const hiddenCount = flat.length - INITIAL_VISIBLE;
 
   return (
     <div className="flex flex-col">
-      {/* Scrollable incident rows */}
-      <div className="flex flex-col divide-y divide-zinc-100">
-        {visible.map((inc, idx) => (
+      {/*
+        Collapsed: show first 5 rows, no scroll.
+        Expanded:  fixed-height scrollable container — the column never grows
+                   beyond the viewport, no page-length explosion.
+      */}
+      <div
+        className={`flex flex-col divide-y divide-zinc-100 transition-all ${
+          expanded
+            ? "overflow-y-auto max-h-72 pr-1 scrollbar-thin"
+            : "overflow-hidden"
+        }`}
+      >
+        {(expanded ? flat : flat.slice(0, INITIAL_VISIBLE)).map((inc, idx) => (
           <IncidentRow key={idx} inc={inc} />
         ))}
       </div>
@@ -129,14 +138,14 @@ export default function IncidentList({ services }: IncidentListProps) {
       {flat.length > INITIAL_VISIBLE && (
         <button
           onClick={() => setExpanded((e) => !e)}
-          className="mt-3 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 transition-colors w-full"
+          className="mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 transition-colors w-full"
         >
           {expanded ? (
             <>
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 15.75 7.5-7.5 7.5 7.5" />
               </svg>
-              Show less
+              Collapse
             </>
           ) : (
             <>
