@@ -147,17 +147,3 @@ Open [http://localhost:3000](http://localhost:3000).
 5. Run `npm run db:push` once locally (pointing at the production Neon DB) to
    create the tables.
 
----
-
-## What I'd Do With More Time
-
-- **Per-day uptime sparklines** — break down uptime by calendar day for each
-  service to spot trends.
-- **Upload history page** — list all previous uploads with their summaries
-  and allow re-querying any batch.
-- **CSV preview** — show a sample of rows before confirming the upload.
-- **Export** — allow the filtered log view to be exported as CSV.
-- **Incident detection tuning** — make the gap threshold configurable.
-- **E2E tests** — Playwright tests for the upload flow and dashboard filters.
-- **Rate limiting** — add basic IP-based rate limiting on the upload endpoint
-  to prevent abuse (out of scope per spec, but important for a real product).
