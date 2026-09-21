@@ -4,6 +4,8 @@
 > reasoning behind it. The goal is that anyone reading this — including a
 > reviewer — can understand *why* each decision was made, not just *what* was
 > decided. Alternatives considered are listed where relevant.
+>
+> **Last updated:** reflects all decisions through final deployed state.
 
 ---
 
@@ -19,14 +21,14 @@ both the frontend pages and the serverless API routes.
   needing a separate Lambda/GCF project.
 - Next.js + Vercel is zero-config: `git push` → deployed. No Dockerfile, no
   build pipeline, no infra config needed.
-- Server Components allow us to avoid client-side data fetching boilerplate
-  on the dashboard — stats can be fetched at render time.
+- Server Components allow direct DB calls at SSR time — the dashboard page
+  calls `getStats()` as a plain function without an HTTP round-trip.
 
 **Alternatives considered:**
 - **React + Vite + separate Express/Lambda:** More moving parts, harder to
   deploy cohesively on free tier.
 - **SvelteKit:** Excellent for this use case, but the React ecosystem
-  (Recharts, PapaParse bindings) is more familiar and better documented.
+  (Recharts, PapaParse) is more familiar and better documented.
 - **Remix:** Good option, but Vercel's native Next.js support edges it out
   for zero-config deployment.
 
@@ -103,7 +105,7 @@ building.
   binary, which doesn't work in serverless without `@prisma/adapter-neon`.
 - **Thin layer:** Drizzle doesn't hide SQL — raw `sql` template literals are
   trivially composable with query builder expressions. For complex
-  aggregations (percentiles, CTEs) we can drop to raw SQL without fighting
+  aggregations (percentiles, CTEs) we drop to raw SQL without fighting
   the ORM.
 - **Migrations are plain SQL files** in `drizzle/migrations/` — readable,
   auditable, and portable.
@@ -130,7 +132,7 @@ function.
   cases: quoted fields with commas, inconsistent line endings, partial rows.
 - `dynamicTyping: false` keeps all values as strings, which is what we want
   — we handle all type coercions ourselves in the cleaning pipeline to
-  maintain explicit control.
+  maintain explicit control over every transformation.
 - Streaming mode is available for large files, avoiding loading the entire
   CSV into memory at once.
 
@@ -174,9 +176,9 @@ all timestamp normalisation.
 
 **Why:**
 - React-native: components wrap SVG directly, no canvas, no ref gymnastics.
-- `BarChart`, `LineChart`, and `ReferenceLine` cover everything we need
-  (uptime bars with 99.9% threshold line, latency charts).
-- MIT licensed, well-maintained, ~580 kB (tree-shakeable).
+- `BarChart` and `ReferenceLine` cover everything we need (uptime bars with
+  99.9% threshold line, custom tooltip).
+- MIT licensed, well-maintained, tree-shakeable.
 
 **Alternatives considered:**
 - **Chart.js + react-chartjs-2:** Canvas-based, slightly harder to make
@@ -191,7 +193,8 @@ all timestamp normalisation.
 
 ## 8. Styling — Tailwind CSS
 
-**Decision:** Use Tailwind CSS (v4) for all styling.
+**Decision:** Use Tailwind CSS (v4) for all styling, with a small `globals.css`
+for custom scrollbar rules that Tailwind's utility classes can't express.
 
 **Why:**
 - Utility-first CSS means no context switching between `.tsx` and `.css`
@@ -263,6 +266,7 @@ on-call engineer or billing team member:
 | P99 latency (ms) | Tail latency; catches outlier spikes invisible in avg |
 | Incident windows | When did it go down? For how long? — the on-call question |
 | First/last check dates | Data range awareness — what period does this cover? |
+| Upload history | Data provenance — which files contributed to the current pool |
 
 **Stats deliberately NOT included:**
 - Per-region breakdown (all data is from `ap-south-1` — no value in showing it)
@@ -271,7 +275,80 @@ on-call engineer or billing team member:
 
 ---
 
-## 13. Free-Tier Compliance
+## 13. No Internal HTTP Fetch from Server Components
+
+**Decision:** The dashboard Server Component calls `getStats()` as a direct
+TypeScript function import, not via `fetch('https://.../api/stats')`.
+
+**Why:** Discovered in deployment that Vercel serverless functions cannot
+reliably make loopback HTTP requests to themselves during SSR. The initial
+implementation used `fetch(\`https://\${VERCEL_URL}/api/stats\`)` and crashed
+with `ERROR 512871464` on the live deployment.
+
+**Solution:** The query logic was extracted into `src/lib/getStats.ts` — a
+plain `async` function shared by both the Server Component (direct import)
+and the `/api/stats` route handler (called from within the route). No
+code duplication, no fragile loopback networking.
+
+---
+
+## 14. Incident Gap Threshold — 30 Minutes
+
+**Decision:** Two consecutive non-2xx checks are part of the same incident
+window if the time gap between them is ≤ 30 minutes.
+
+**Why:** The check interval is 15 minutes. A gap of 30 minutes (2× the
+check interval) means at most one missed check separates two error events.
+A single missed check is more likely a monitoring blip (agent offline,
+network timeout) than the end of an outage. Using 30 min prevents
+artificially splitting one real incident into many tiny 1-error "incidents."
+
+---
+
+## 15. Lazy DB Connection — `getDb()` Factory
+
+**Decision:** The Drizzle database client is created lazily inside a
+`getDb()` function rather than at module load time.
+
+**Why:** Next.js evaluates module-level code during the build step (when
+collecting route metadata). If `DATABASE_URL` is not set in the build
+environment (which it isn't, for security), a module-level `new neon(url)`
+would throw at build time and break the CI/CD deploy.
+
+By moving the connection inside `getDb()`, the error is deferred to
+**request time** — only thrown when an actual API call is made in an
+environment where `DATABASE_URL` is expected to be present.
+
+---
+
+## 16. Uptime Chart Y-axis Floor
+
+**Decision:** The bar chart Y-axis is anchored at:
+- **95%** when any service is below 99%
+- **98%** when all services are above 99%
+
+**Why:** An auto-zoomed Y-axis (e.g. 99.9998%–100%) makes all bars look
+identical even when uptime varies from 97% to 99.2% — the differences become
+invisible. Fixed floors at 95% and 98% ensure the bars show meaningful visual
+differences while still keeping the SLA threshold line visible.
+
+---
+
+## 17. Incident List — Fixed-Height Scroll Container
+
+**Decision:** When the incident list is expanded, it renders inside a
+fixed-height (`max-h-72`, 288px) scrollable container rather than expanding
+in-place.
+
+**Why:** With 278 incidents across all uploaded files, expanding in-place
+caused the column to grow far beyond the paired latency table, creating a
+very poor layout where one side of the two-column grid was hundreds of pixels
+taller than the other. A scroll container keeps the layout bounded regardless
+of incident count, and the content remains fully accessible via scroll.
+
+---
+
+## 18. Free-Tier Compliance
 
 | Service | Free tier | Usage |
 |---------|-----------|-------|

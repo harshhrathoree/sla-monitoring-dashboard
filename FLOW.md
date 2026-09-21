@@ -4,102 +4,144 @@
 > this system — from a raw CSV file on a user's machine to the numbers shown
 > on the dashboard. Every stage is described end-to-end with the decisions
 > that shape each step.
+>
+> **Last updated:** reflects the final deployed state at
+> `https://sla-monitoring-dashboard.vercel.app`
 
 ---
 
 ## Table of Contents
 
 1. [High-Level Architecture](#1-high-level-architecture)
-2. [Stage 1 — Upload UI](#2-stage-1--upload-ui)
-3. [Stage 2 — Serverless Upload Function](#3-stage-2--serverless-upload-function)
-4. [Stage 3 — Data Cleaning Pipeline (inside the function)](#4-stage-3--data-cleaning-pipeline)
-5. [Stage 4 — Database Persistence](#5-stage-4--database-persistence)
-6. [Stage 5 — Query API Routes](#6-stage-5--query-api-routes)
-7. [Stage 6 — Dashboard UI](#7-stage-6--dashboard-ui)
-8. [Data Quality Issues & Handling](#8-data-quality-issues--handling)
-9. [SLA Calculation Logic](#9-sla-calculation-logic)
-10. [Database Schema](#10-database-schema)
-11. [Environment & Configuration](#11-environment--configuration)
+2. [Full Route Map](#2-full-route-map)
+3. [Stage 1 — Upload UI](#3-stage-1--upload-ui)
+4. [Stage 2 — Serverless Upload Function](#4-stage-2--serverless-upload-function)
+5. [Stage 3 — Data Cleaning Pipeline](#5-stage-3--data-cleaning-pipeline)
+6. [Stage 4 — Database Persistence](#6-stage-4--database-persistence)
+7. [Stage 5 — Query API Routes](#7-stage-5--query-api-routes)
+8. [Stage 6 — Dashboard UI](#8-stage-6--dashboard-ui)
+9. [Data Quality Issues & Handling](#9-data-quality-issues--handling)
+10. [SLA Calculation Logic](#10-sla-calculation-logic)
+11. [Incident Detection Logic](#11-incident-detection-logic)
+12. [Database Schema](#12-database-schema)
+13. [Key Architectural Decision — No Internal HTTP Fetch](#13-key-architectural-decision--no-internal-http-fetch)
+14. [Environment & Configuration](#14-environment--configuration)
 
 ---
 
 ## 1. High-Level Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                        VERCEL (free Hobby tier)                     │
-│                                                                      │
-│  ┌──────────────┐   multipart/form-data    ┌──────────────────────┐ │
-│  │  Upload Page  │ ───────────────────────► │  /api/upload         │ │
-│  │  (Next.js)    │                          │  Serverless Function │ │
-│  └──────────────┘                          │  (Node.js runtime)   │ │
-│                                            └──────────┬───────────┘ │
-│  ┌──────────────┐   GET /api/stats                    │ batch upsert│
-│  │  Dashboard    │ ◄─────────────────────────────────┐│             │
-│  │  (Next.js)    │   GET /api/logs?...                ││             │
-│  └──────────────┘ ◄─────────────────────────────────┐│▼             │
-│                                            ┌──────────┴───────────┐ │
-│                                            │   /api/stats          │ │
-│                                            │   /api/logs           │ │
-│                                            │  (Serverless Funcs)  │ │
-│                                            └──────────┬───────────┘ │
-└────────────────────────────────────────────────────────┼────────────┘
-                                                         │ SQL (neon-http)
-                                              ┌──────────▼───────────┐
-                                              │   Neon Serverless     │
-                                              │   Postgres            │
-                                              │   (free tier, 0.5 GB) │
-                                              └──────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        VERCEL (free Hobby tier)                      │
+│                                                                       │
+│  ┌───────────────┐  multipart/form-data   ┌──────────────────────┐  │
+│  │  Upload Page  │ ─────────────────────► │  POST /api/upload    │  │
+│  │  /            │                        │  Serverless Function │  │
+│  │  (SSG)        │  GET /api/uploads      │  (Node.js 20)        │  │
+│  │               │ ◄───────────────────── └──────────┬───────────┘  │
+│  └───────────────┘                                   │ batch upsert │
+│                                                       ▼              │
+│  ┌───────────────┐  getStats() direct call  ┌────────────────────┐  │
+│  │  Dashboard    │ ────────────────────────►│  lib/getStats.ts   │  │
+│  │  /dashboard   │                          │  (shared query fn) │  │
+│  │  (SSR, force- │  GET /api/logs?...        └────────┬───────────┘  │
+│  │   dynamic)    │ ◄─────────────────────────────────┐│             │
+│  └───────────────┘                         ┌─────────┴┴──────────┐  │
+│                                            │  /api/logs           │  │
+│                                            │  /api/stats (wrap)   │  │
+│                                            │  /api/uploads        │  │
+│                                            │  /api/clear-data     │  │
+│                                            │  (Serverless Funcs)  │  │
+│                                            └──────────┬───────────┘  │
+└───────────────────────────────────────────────────────┼─────────────┘
+                                                        │ SQL (neon-http)
+                                             ┌──────────▼───────────┐
+                                             │   Neon Serverless     │
+                                             │   Postgres            │
+                                             │   (free tier, 0.5 GB) │
+                                             └──────────────────────┘
 ```
 
-**Key constraint satisfied:** The `/api/upload` route is a real Vercel
-Serverless Function — it runs in Vercel's cloud infrastructure, not locally
-or in a container, fulfilling the problem statement's requirement.
+**Key constraint satisfied:** Every `/api/*` route is a real Vercel Serverless
+Function running on AWS Lambda-backed Vercel infrastructure — not locally, not
+in a container. This fulfils the spec's "must actually run in the cloud"
+requirement.
 
 ---
 
-## 2. Stage 1 — Upload UI
+## 2. Full Route Map
 
-**Route:** `/` (Next.js App Router page)
+| Route | Type | Purpose |
+|-------|------|---------|
+| `GET /` | Static (SSG) | Upload page — drag-and-drop CSV + upload history |
+| `GET /dashboard` | Dynamic (SSR) | SLA stats + filterable log table |
+| `POST /api/upload` | Serverless | Receive CSV → clean → upsert to Neon |
+| `GET /api/stats` | Serverless | Per-service SLA aggregates (wraps `getStats()`) |
+| `GET /api/logs` | Serverless | Paginated, filtered health-check rows |
+| `GET /api/uploads` | Serverless | Last 20 upload batch summaries |
+| `DELETE /api/clear-data` | Serverless | TRUNCATE all rows (with UI confirmation) |
 
-### User actions
-1. User opens the root page (`/`).
-2. Drags a `.csv` file onto the drop zone **or** clicks to open a file picker.
-3. The file is read client-side to show the filename and estimated row count
-   (via a quick line-count scan — no full parse in the browser).
-4. User clicks **Upload**. The file is `POST`-ed to `/api/upload` as
-   `multipart/form-data` with the field name `file`.
-5. A progress bar shows while the request is in flight.
-6. On success, a result card is shown:
-   - Rows processed
-   - Rows inserted (new)
-   - Rows flagged (data quality issues found)
-   - Rows skipped (duplicates)
-   - Link to the Dashboard
+---
+
+## 3. Stage 1 — Upload UI
+
+**Route:** `/` (Next.js App Router, statically generated)  
+**Files:** `src/app/page.tsx`, `src/components/UploadPageClient.tsx`,
+`src/components/UploadForm.tsx`, `src/components/UploadHistory.tsx`
+
+### Component tree
+
+```
+page.tsx (Server Component)
+  └── UploadPageClient (Client Component — owns refreshKey state)
+        ├── UploadForm       — drag-and-drop + upload state machine
+        └── UploadHistory    — fetches /api/uploads, re-fetches on success
+```
+
+### Upload state machine (inside UploadForm)
+
+```
+idle
+  │  user selects file
+  ▼
+file_selected
+  │  user clicks "Upload & Process"
+  ▼
+uploading  ──── POST /api/upload ──────►  success
+                                    └──►  error (shows banner, returns to idle)
+```
+
+### On success
+1. `UploadResultCard` shown: rows processed / inserted / flagged / skipped + duration
+2. `onUploadSuccess()` callback fires → `refreshKey` increments → `UploadHistory`
+   re-fetches and shows the new batch at the top of the list
+3. "View Dashboard" link navigates to `/dashboard`
 
 ### What does NOT happen in the browser
-- No CSV parsing. The browser only reads the raw bytes and sends them.
-- No validation. All validation happens in the serverless function.
-- No state persistence. The page is stateless.
+- No CSV parsing — the browser reads raw bytes and POSTs them.
+- No validation — all validation happens in the serverless function.
+- No persistent state — the page is otherwise stateless.
 
 ---
 
-## 3. Stage 2 — Serverless Upload Function
+## 4. Stage 2 — Serverless Upload Function
 
 **Route:** `POST /api/upload`  
 **Runtime:** Vercel Serverless Function, Node.js 20  
-**File:** `src/app/api/upload/route.ts`
+**File:** `src/app/api/upload/route.ts`  
+**Max duration:** 60 s (configured via `export const maxDuration = 60`)
 
 ### Responsibilities
-1. Receive the `multipart/form-data` request.
-2. Extract the CSV file buffer.
-3. Pass the buffer through the **Data Cleaning Pipeline** (Stage 3).
-4. Batch-upsert the cleaned rows into Neon (Stage 4).
-5. Return a JSON summary.
-
-### Size limit
-Vercel's default request body limit is 4.5 MB. For larger files, the
-function config raises this to 10 MB — enough for all provided datasets.
+1. Receive `multipart/form-data`, extract the `file` field.
+2. Validate: must be `.csv`, non-empty.
+3. Parse with **PapaParse** (`dynamicTyping: false` — all values stay as strings
+   so the cleaning pipeline controls all type coercions).
+4. Run the **Data Cleaning Pipeline** (`src/lib/cleaner.ts`).
+5. Insert an `upload_batches` row to obtain a UUID batch ID.
+6. Batch-upsert cleaned rows in chunks of 500 with `ON CONFLICT DO NOTHING`.
+7. Update `upload_batches` with final counts.
+8. Return a JSON summary.
 
 ### Response shape
 ```json
@@ -116,217 +158,226 @@ function config raises this to 10 MB — enough for all provided datasets.
 
 ---
 
-## 4. Stage 3 — Data Cleaning Pipeline
+## 5. Stage 3 — Data Cleaning Pipeline
 
 **File:** `src/lib/cleaner.ts`
 
-This is the core logic. Every row from PapaParse flows through a sequence of
-deterministic transformations. Each step either fixes a value or attaches a
-flag to the row.
+All functions are **pure** — no side effects, no DB access. This makes them
+independently unit-testable. 39 unit tests cover every rule and edge case.
 
 ### Pipeline steps (applied in order per row)
 
 ```
-Raw CSV row
+Raw CSV row (all values as strings)
     │
     ▼
 [1] Header guard
-    │  Skip rows where status_code is non-numeric (stray header repeats)
+    │  status_code non-numeric → skip (reason: "header")
     │
     ▼
-[2] Timestamp normalisation
-    │  a) Pure 10-digit integer → treat as Unix epoch (seconds) → ISO UTC
+[2] Required field check
+    │  Missing service_id / timestamp / status_code → skip (reason: "missing_required")
+    │
+    ▼
+[3] Timestamp normalisation
+    │  a) Pure 9–11 digit integer → Unix epoch (seconds) → UTC ISO
     │     flag: epoch_timestamp
-    │  b) ISO string with non-Z timezone offset (e.g. +05:30) → parse with
-    │     timezone awareness → convert to UTC
+    │  b) ISO string with non-Z offset (e.g. +05:30) → parse tz-aware → UTC
     │     flag: tz_normalised
-    │  c) Already ISO UTC (Z suffix) → parse as-is, no flag
+    │  c) ISO UTC (Z suffix) → parse as-is, no flag
+    │  d) Unparseable → skip (reason: "missing_required")
     │
     ▼
-[3] Latency unit normalisation
-    │  Read latency_unit column:
-    │  - "ms" → store value as-is (already milliseconds)
-    │  - "s"  → multiply by 1000 → store in ms
-    │            flag: unit_normalised
+[4] Latency unit normalisation
+    │  latency_unit = "s"  → value × 1000 → stored in ms
+    │                         flag: unit_normalised
+    │  latency_unit = "ms" → store as-is
     │
     ▼
-[4] Null / missing latency
-    │  Empty string or absent value → set latencyMs = null
+[5] Null / missing latency
+    │  Empty string or absent → latencyMs = null
     │  flag: null_latency
     │
     ▼
-[5] Negative latency
-    │  Value < 0 → set latencyMs = null (cannot be a valid measurement)
+[6] Negative latency
+    │  value < 0 → latencyMs = null (physically impossible)
     │  flag: negative_latency
     │
     ▼
-[6] Invalid HTTP status code
-    │  Valid range: 100–599 (per RFC 7231)
-    │  Out-of-range (e.g. 999) → keep raw value for traceability, set flag
+[7] Invalid HTTP status code
+    │  Outside 100–599 (RFC 7231) → keep raw value, add flag
     │  flag: invalid_status
     │
     ▼
-[7] Missing required fields
-    │  If service_id, timestamp, or status_code is absent → skip row entirely
-    │  (counted in rowsSkipped, not rowsFlagged)
-    │
-    ▼
-Cleaned row ready for upsert
+Cleaned row — ready for DB upsert
 ```
 
 ### Flag accumulation
-A row can carry multiple flags. They are stored as a comma-separated string
-in the `data_quality_flags` column, e.g. `"epoch_timestamp,null_latency"`.
+A single row can carry multiple flags stored as a comma-separated string:
+`"epoch_timestamp,null_latency"`. The dashboard renders these as amber badges
+on the log row.
 
-### Multi-agent duplicates
-The unique key is `(service_id, timestamp_utc, agent)`. If two different
-agents report the same service at the same timestamp, **both rows are kept**
-— that is intentional multi-agent redundancy, not a bug.
-
-True duplicates (identical triplet) are handled by the database upsert:
-`ON CONFLICT DO NOTHING`. They count as `rowsSkipped`.
+### Multi-agent deduplication
+Unique key: `(service_id, timestamp_utc, agent)`.
+- Same service + same timestamp + **different agents** → both rows kept (intentional redundancy).
+- Identical triplet → `ON CONFLICT DO NOTHING` → counted as `rowsSkipped`.
 
 ---
 
-## 5. Stage 4 — Database Persistence
+## 6. Stage 4 — Database Persistence
 
-**DB:** Neon Serverless Postgres (free tier)  
-**ORM:** Drizzle ORM with `neon-http` driver
+**DB:** Neon Serverless Postgres  
+**ORM:** Drizzle ORM with `neon-http` driver  
+**Connection:** Lazy `getDb()` factory — no module-load-time connection,
+safe for Next.js build environments without `DATABASE_URL`.
 
-### Tables
-
-| Table | Purpose |
-|-------|---------|
-| `upload_batches` | One row per upload event; stores summary counts |
-| `monitoring_checks` | One row per cleaned health-check; FK to upload_batches |
-
-### Upsert strategy
-Rows are written in batches of **500** using Drizzle's
-`onConflictDoNothing()` on the unique constraint
-`(service_id, timestamp_utc, agent)`.
-
-Batching avoids hitting Neon's connection limits and keeps each INSERT
-statement within Postgres's parameter limit (~65 535 parameters).
-
-### After insert
-The `upload_batches` row is updated with final counts
-(rows_processed, rows_inserted, rows_flagged, rows_skipped).
-
----
-
-## 6. Stage 5 — Query API Routes
-
-### `GET /api/stats`
-**File:** `src/app/api/stats/route.ts`
-
-Returns per-service aggregates used by the stats section:
-
+### Batch upsert
+Rows upserted in chunks of **500** to stay within Postgres's 65 535-parameter
+limit (9 params × 500 = 4 500 per statement). Each chunk uses:
 ```sql
-SELECT
-  service_id,
-  service_name,
-  COUNT(*)                                              AS total_checks,
-  COUNT(*) FILTER (WHERE status_code BETWEEN 200 AND 299) AS successful_checks,
-  ROUND(
-    COUNT(*) FILTER (WHERE status_code BETWEEN 200 AND 299)::numeric
-    / COUNT(*)::numeric * 100, 4
-  )                                                     AS uptime_pct,
-  AVG(latency_ms) FILTER (WHERE latency_ms IS NOT NULL)  AS avg_latency_ms,
-  PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY latency_ms)
-    FILTER (WHERE latency_ms IS NOT NULL)               AS p99_latency_ms,
-  MIN(timestamp_utc)                                    AS first_check,
-  MAX(timestamp_utc)                                    AS last_check
-FROM monitoring_checks
-GROUP BY service_id, service_name
-ORDER BY service_id;
+INSERT INTO monitoring_checks (...) VALUES (...)
+ON CONFLICT (service_id, timestamp_utc, agent) DO NOTHING
+RETURNING id
 ```
+`rowsInserted = COUNT(RETURNING)`. DB-level duplicates = `cleanedRows.length − rowsInserted`.
 
-SLA breach is computed in application code:
-`uptime_pct < 99.9 → sla_breached = true`.
+### Clear data
+`DELETE /api/clear-data` runs:
+```sql
+TRUNCATE TABLE upload_batches, monitoring_checks RESTART IDENTITY CASCADE
+```
+Cascade handles the FK. Sequence reset means IDs restart from 1 on next upload.
+
+---
+
+## 7. Stage 5 — Query API Routes
+
+### `GET /api/stats` — wraps `src/lib/getStats.ts`
+
+The actual query logic lives in `getStats()` — a plain async function shared
+by both `/api/stats` (HTTP) and the dashboard Server Component (direct call,
+no HTTP round-trip). Five SQL queries run in sequence:
+
+| Query | SQL highlights |
+|-------|---------------|
+| Per-service aggregates | `COUNT FILTER`, `AVG FILTER`, `PERCENTILE_CONT(0.99)` |
+| Per-service per-day | `DATE_TRUNC('day', timestamp_utc)` group-by |
+| Error timestamps | All non-2xx rows sorted by time → incident builder |
+| Latest upload time | `ORDER BY uploaded_at DESC LIMIT 1` |
+| Total row count | `COUNT(*)` |
 
 ### `GET /api/logs`
-**File:** `src/app/api/logs/route.ts`
 
-Accepts query params:
-- `service` — filter by service_id (optional)
-- `from` — ISO date string, start of range (optional)
-- `to` — ISO date string, end of range (optional)
-- `status` — `ok` | `error` | `flagged` (optional)
-- `page` — 1-based page number (default: 1)
-- `limit` — rows per page (default: 50, max: 200)
+Dynamic `WHERE` clause built by reducing `sql` fragments:
 
-Returns paginated rows plus `totalCount` for the client to render pagination.
+```
+?service=svc-auth     → WHERE service_id = 'svc-auth'
+?from=2025-05-01      → AND timestamp_utc >= '2025-05-01'::timestamptz
+?to=2025-05-10        → AND timestamp_utc < '2025-05-11'::timestamptz  (next day)
+?status=error         → AND (status_code < 200 OR status_code > 299)
+?status=flagged       → AND data_quality_flags IS NOT NULL AND data_quality_flags != ''
+```
+
+Pagination: `LIMIT {limit} OFFSET {(page-1)*limit}`. A separate `COUNT(*)` with
+the same `WHERE` provides `totalCount` for the client-side pagination controls.
+
+### `GET /api/uploads`
+
+Returns last 20 `upload_batches` rows, newest first. Powers the upload history
+table on the upload page.
 
 ---
 
-## 7. Stage 6 — Dashboard UI
+## 8. Stage 6 — Dashboard UI
 
-**Route:** `/dashboard`  
+**Route:** `/dashboard` — `force-dynamic` SSR  
 **File:** `src/app/dashboard/page.tsx`
+
+### Data flow on page load
+
+```
+Browser requests /dashboard
+       │
+       ▼
+Next.js Server Component renders
+       │
+       ├── getStats() called directly (DB query, no HTTP)
+       │         │
+       │         └── StatsSection rendered with data as props (SSR)
+       │
+       └── LogsSection rendered as client shell (data fetched client-side)
+                 │
+                 └── useEffect → GET /api/logs?page=1&limit=50
+```
 
 ### Layout
 
 ```
-┌────────────────────────────────────────────────────────┐
-│  SLA Monitoring Dashboard          [▲ Collapse Stats]  │
-├────────────────────────────────────────────────────────┤
-│  STATS SECTION (collapsible)                           │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
-│  │ svc-auth │ │svc-notify│ │svc-paym..│ │svc-repor│ │
-│  │  ✓ 99.97%│ │  ✗ 99.7% │ │  ✓ 99.9+ │ │  ✓ 99.9+│ │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ │
-│                                                        │
-│  [Uptime bar chart per service]                        │
-│  [Avg / P99 latency table]                             │
-│  [Incident windows list]                               │
-├────────────────────────────────────────────────────────┤
-│  LOGS SECTION                                          │
-│  Filter: [Service ▼] [From date] [To date] [Status ▼] │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │ Timestamp  │ Service │ Status │ Latency │ Agent  │  │
-│  │ ...        │ ...     │ ...    │ ...     │ ...    │  │
-│  └──────────────────────────────────────────────────┘  │
-│  [← Prev]  Page 1 of 312  [Next →]                    │
-└────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  NavBar: [● SLA Monitor]                    [Upload] [Dashboard] │
+├──────────────────────────────────────────────────────────────────┤
+│  Dashboard heading          [Clear all data ▼]  [↑ Upload CSV]  │
+├──────────────────────────────────────────────────────────────────┤
+│  ▼ SLA Statistics  98.7% overall  ● 5 breaches  27,903 rows     │  ← collapsible header
+│ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │
+│  SERVICE SLA STATUS (5 services)                                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │
+│  │ auth-api │ │notify-w..│ │payments..│ │reports-a │ │search-a│ │
+│  │ ✗ 99.22% │ │ ✗ 99.19% │ │ ✗ 98.98% │ │ ✗ 97.10% │ │✗ 99.14%│ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │
+│                                                                    │
+│  UPTIME % PER SERVICE  [bar chart, 98%–100% Y-axis, SLA line]    │
+│                                                                    │
+│  RESPONSE LATENCY          │  INCIDENT WINDOWS (35)              │
+│  service  avg    p99  days │  30m  search-api  16 May...         │
+│  auth-api 145ms 191ms 10d  │  0m   search-api  16 May...         │
+│  ...                       │  0m   reports-api 15 May...         │
+│                            │  [Show 30 more incidents ▼]         │
+│                            │  (expands into 288px scroll box)     │
+├──────────────────────────────────────────────────────────────────┤
+│  Health Check Logs  4,665 rows                                    │
+│  [All services ▼] [from date] [to date] [All statuses ▼]        │
+│  Timestamp UTC  │ Service │ Status │ Latency │ Agent │ Flags     │
+│  ...            │ ...     │  200   │ 145ms   │ ...   │           │
+│  [← Prev]  Page 1 of 94  [1][2][3][4][5]  [Next →]             │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Stats section details
-- **Service cards** — one card per service showing: uptime %, SLA status
-  (green ✓ / red ✗), total checks, error count, avg latency ms
-- **Uptime bar chart** — horizontal bars, one per service, showing uptime %
-  with 99.9% SLA threshold line
-- **Latency table** — avg and p99 latency per service
-- **Incident windows** — derived from consecutive 5xx runs; shows service,
-  start time, end time, and duration
+### Uptime chart Y-axis
+- Any service below 99% → floor at **95%**
+- All services above 99% → floor at **98%**
+- Prevents the "all bars look equal" problem when zooming to e.g. 99.99%–100%
 
-### Logs section details
-- Columns: timestamp (UTC), service, status code, latency (ms), agent,
-  region, quality flags
-- Status codes coloured: green for 2xx, red for 5xx, orange for others
-- Quality flags shown as small badges on the row
-- Pagination: 50 rows per page with prev/next controls
+### Incident windows
+- Collapsed: shows top 5 incidents (most recent first)
+- Expanded: all incidents in a **fixed-height 288px scrollable box** with a
+  4px thin scrollbar — the layout never blows out regardless of incident count
+
+### Clear all data
+Two-step confirmation: click "Clear all data" → inline prompt with "Yes, clear"
+/ "Cancel" → `DELETE /api/clear-data` → `router.refresh()` reloads to empty state.
 
 ---
 
-## 8. Data Quality Issues & Handling
+## 9. Data Quality Issues & Handling
 
-All issues were discovered by inspecting the raw CSV files before writing
-any code. The full list:
+All issues were discovered by directly inspecting the raw CSV files before
+writing any code. Reproducing the full dataset log is in `dataset_incident_log.json`.
 
-| # | Issue | Prevalence | Handling |
-|---|-------|-----------|---------|
-| 1 | Unix epoch timestamps (10-digit int) | ~dozens per file | Detect pure-digit field → parse as seconds → UTC |
-| 2 | Non-UTC timezone offsets (+05:30) | ~dozens per file | Parse with Day.js tz-aware → convert to UTC |
-| 3 | Mixed latency units (s vs ms) | All svc-search rows | Read `latency_unit` col; × 1000 if "s" |
-| 4 | Null / empty latency | ~5–10 per file | Store NULL; exclude from aggregates |
-| 5 | Negative latency (-223 ms) | Rare | Store NULL; flag row |
-| 6 | Invalid HTTP status 999 | 3 rows across files | Keep value; flag row; exclude from uptime calc |
-| 7 | Multi-agent duplicate timestamps | Many rows | Intentional; unique key includes agent |
-| 8 | Stray header row in data | Rare | Skip rows where status_code is non-numeric |
+| # | Issue | Where found | Handling |
+|---|-------|------------|---------|
+| 1 | Unix epoch timestamps (10-digit int) | All files | Detect pure-digit field → parse as Unix seconds → UTC ISO |
+| 2 | Non-UTC timezone offsets (`+05:30`) | All files | Day.js tz-aware parse → `.utc().toISOString()` |
+| 3 | Mixed latency units (`s` vs `ms`) | All `svc-search` rows | Read `latency_unit` col; multiply by 1000 if `"s"` |
+| 4 | Null / empty latency | ~5–10 per file | Store `NULL`; exclude from `AVG`/`PERCENTILE_CONT` |
+| 5 | Negative latency (`-223 ms`) | Rare (1–2 rows) | Store `NULL`; flag `negative_latency` |
+| 6 | Invalid HTTP status `999` | 3 rows across files | Keep value for traceability; flag `invalid_status`; counts as "down" |
+| 7 | Multi-agent duplicate timestamps | Many rows | Intentional — unique key includes `agent`; both rows preserved |
+| 8 | Stray header row in data body | Rare | Skip rows where `status_code` is non-numeric |
 
 ---
 
-## 9. SLA Calculation Logic
+## 10. SLA Calculation Logic
 
 ```
 uptime_pct = (checks_with_2xx_status / total_checks) × 100
@@ -334,53 +385,106 @@ uptime_pct = (checks_with_2xx_status / total_checks) × 100
 SLA target  = 99.9%
 SLA breach  = uptime_pct < 99.9
 
-Rows excluded from uptime denominator: NONE
-  → Every check counts. A check with status 999 counts as "down."
-  → A check with NULL latency but valid 2xx status still counts as "up."
+Inclusion rules:
+  ✓ Every check counts in the denominator — no exclusions
+  ✓ status 999 → counts as "down"
+  ✓ NULL latency + valid 2xx status → counts as "up"
+  ✓ Multi-agent checks are independent — both count separately
 
-Incident window = consecutive run of non-2xx checks for the same service,
-  sorted by timestamp_utc, gap between checks ≤ 30 min (2× the 15-min interval).
+Aggregation scope: across the full date range of all uploaded data.
+Per-day breakdown is available via the daily_uptime array in the stats response.
 ```
 
 ---
 
-## 10. Database Schema
+## 11. Incident Detection Logic
+
+**File:** `src/lib/getStats.ts` → `buildIncidents()`
+
+```
+Input: all non-2xx timestamps for one service, sorted chronologically
+
+Algorithm:
+  windowStart = first error
+  windowEnd   = first error
+  errorCount  = 1
+
+  for each subsequent error:
+    gap = current.time − previous.time (minutes)
+
+    if gap ≤ 30:           ← 30 min = 2× the 15-min check interval
+      extend window (windowEnd = current, errorCount++)
+    else:
+      close window → push Incident
+      start new window at current
+
+  push final open window
+
+Output: Incident[]  { startTime, endTime, durationMinutes, errorCount }
+```
+
+**Gap threshold = 30 minutes** — chosen as 2× the check interval. A single
+missed check (agent offline, network blip) does not artificially split one
+incident into two.
+
+---
+
+## 12. Database Schema
 
 ### `upload_batches`
 | Column | Type | Notes |
 |--------|------|-------|
-| id | UUID PK | gen_random_uuid() |
-| filename | VARCHAR(255) | original filename |
-| uploaded_at | TIMESTAMPTZ | server time of upload |
-| rows_processed | SMALLINT | total rows seen |
-| rows_inserted | SMALLINT | new rows written |
-| rows_flagged | SMALLINT | rows with quality flags |
-| rows_skipped | SMALLINT | duplicates / invalid |
+| `id` | UUID PK | `gen_random_uuid()` |
+| `filename` | VARCHAR(255) | Original uploaded filename |
+| `uploaded_at` | TIMESTAMPTZ | Server-side timestamp; default `NOW()` |
+| `rows_processed` | SMALLINT | Total rows PapaParse produced |
+| `rows_inserted` | SMALLINT | Rows actually written to DB |
+| `rows_flagged` | SMALLINT | Rows written with at least one quality flag |
+| `rows_skipped` | SMALLINT | Rows dropped (header, missing required, DB conflict) |
 
 ### `monitoring_checks`
 | Column | Type | Notes |
 |--------|------|-------|
-| id | SERIAL PK | |
-| service_id | VARCHAR(50) | e.g. svc-auth |
-| service_name | VARCHAR(100) | e.g. auth-api |
-| timestamp_utc | TIMESTAMPTZ | always UTC |
-| status_code | SMALLINT | raw HTTP code |
-| latency_ms | REAL | normalised to ms; NULL if invalid |
-| agent | VARCHAR(50) | e.g. agent-1 |
-| region | VARCHAR(50) | e.g. ap-south-1 |
-| data_quality_flags | TEXT | comma-separated flag names |
-| upload_batch_id | UUID FK | → upload_batches.id CASCADE DELETE |
+| `id` | SERIAL PK | Auto-increment |
+| `service_id` | VARCHAR(50) | e.g. `svc-auth` |
+| `service_name` | VARCHAR(100) | e.g. `auth-api` |
+| `timestamp_utc` | TIMESTAMPTZ | Always UTC; normalised from epoch/offset |
+| `status_code` | SMALLINT | Raw HTTP code (including invalid values like 999) |
+| `latency_ms` | REAL | Normalised to ms; `NULL` if missing or invalid |
+| `agent` | VARCHAR(50) | e.g. `agent-1` |
+| `region` | VARCHAR(50) | e.g. `ap-south-1` |
+| `data_quality_flags` | TEXT | Comma-separated flag names; `""` if clean |
+| `upload_batch_id` | UUID FK | → `upload_batches.id` ON DELETE CASCADE |
 
-**Unique constraint:** `(service_id, timestamp_utc, agent)`  
-**Indexes:** service_id, timestamp_utc, status_code, upload_batch_id
+**Unique constraint:** `uq_check_key (service_id, timestamp_utc, agent)`  
+**Indexes:** `idx_service_id`, `idx_timestamp_utc`, `idx_status_code`, `idx_upload_batch`
 
 ---
 
-## 11. Environment & Configuration
+## 13. Key Architectural Decision — No Internal HTTP Fetch
+
+The dashboard Server Component (`/dashboard`) **calls `getStats()` directly**
+as a TypeScript function rather than fetching `https://.../api/stats` over HTTP.
+
+**Why this matters:** Vercel serverless functions cannot reliably make
+loopback HTTP requests to themselves during SSR — the request would need to
+leave Vercel's edge, traverse the internet, and re-enter the same function.
+This caused a hard crash (`ERROR 512871464`) in the initial deployment.
+
+**The fix:** Query logic lives in `src/lib/getStats.ts` — a plain async
+function imported by both:
+- `src/app/dashboard/page.tsx` → called directly at SSR render time
+- `src/app/api/stats/route.ts` → called when clients hit the API endpoint
+
+This keeps the code DRY and eliminates the fragile loopback pattern entirely.
+
+---
+
+## 14. Environment & Configuration
 
 | Variable | Where set | Purpose |
 |----------|-----------|---------|
-| `DATABASE_URL` | Vercel env / `.env.local` | Neon connection string with SSL |
+| `DATABASE_URL` | Vercel env vars / `.env.local` | Neon Postgres connection string with `?sslmode=require` |
 
-No other secrets or configuration are required. The app is intentionally
-stateless at the function layer — all state lives in Neon.
+No other environment variables are required. The entire application state
+lives in Neon — Vercel functions are stateless.
