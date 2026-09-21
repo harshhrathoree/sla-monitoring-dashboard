@@ -5,7 +5,7 @@ logs → serverless cloud function parses & cleans → persisted to Postgres →
 single-screen dashboard shows stats + filterable logs.
 
 > **Live URL:** https://sla-monitoring-dashboard.vercel.app
-> **Last verified live:** 2025-09-18
+> **Last verified live:** 2025-09-21
 
 ---
 
